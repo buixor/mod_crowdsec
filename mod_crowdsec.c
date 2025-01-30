@@ -422,7 +422,12 @@ static int crowdsec_proxy(request_rec * r, const char **response)
 
     status = ap_run_sub_req(rr);
 
-    if (HTTP_NOT_FOUND == status) {
+    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, APR_SUCCESS, r,
+                  "crowdsec: function call status is '%d' (response status is "
+                  "'%d') from url: %s",
+                  status, rr->status, rr->filename);
+
+    if (HTTP_NOT_FOUND == status || (!status && HTTP_NOT_FOUND == rr->status)) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_SUCCESS, r,
                       "crowdsec: we received a 404 Not Found when speaking "
                       "to the crowdsec service '%s', you might be pointing at "
