@@ -101,10 +101,16 @@
 
 module AP_MODULE_DECLARE_DATA crowdsec_module;
 
+struct url {
+    const char *scheme;
+    const char *authority;
+    const char *path;
+};
+
 typedef struct
 {
     /* the url of the crowdsec service */
-    const char *url;
+    struct url *url;
     /* the API key of the crowdsec service */
     const char *key;
     /* shared obect cache mutex */
@@ -368,11 +374,11 @@ static int crowdsec_proxy(request_rec * r, const char **response)
      * filter that reads and parses the response from the API.
      */
 
-    const char *target = apr_pstrcat(r->pool, sconf->url,
-                                     "/v1/decisions?ip=",
-                                     ap_escape_urlencoded(r->pool,
-                                                          r->useragent_ip),
-                                     NULL);
+    char *api_path = "/v1/decisions?ip=";
+
+    const char *target = apr_pstrcat(
+        r->pool, sconf->url->scheme, "://", sconf->url->authority, api_path,
+        ap_escape_urlencoded(r->pool, r->useragent_ip), NULL);
 
     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, APR_SUCCESS, r,
                   "crowdsec: looking up IP '%s' at url: %s",
@@ -865,6 +871,64 @@ static const char *set_crowdsec_location(cmd_parms *cmd, void *dconf,
     return NULL;
 }
 
+// Note: url *must* be null-terminated
+struct url *find_base_lapi_url(apr_pool_t *pool, const char *url,
+                               const char **err)
+{
+    char *scheme = NULL;
+    char *authority = NULL;
+    apr_size_t authority_start_idx = 0;
+    char *path = NULL;
+
+    for (apr_size_t i = 0; url[i] != '\0'; i++) {
+        if (!scheme) {
+            if (url[i] == ':') {
+                scheme = apr_pstrndup(pool, url, i);
+                if (apr_cstr_casecmpn(url + i + 1, "//", 2)) {
+                    *err =
+                        "invalid lapi base url: \"//\" after scheme not found";
+                    return NULL;
+                }
+                authority_start_idx = i + 3;
+                i += 2;
+            }
+            continue;
+        }
+        if (!authority) {
+            if (url[i] == '/') {
+                authority = apr_pstrndup(pool, url + authority_start_idx,
+                                         i - authority_start_idx);
+                i--;
+            }
+            continue;
+        }
+        if (!path) {
+            path = apr_pstrdup(pool, url + i);
+            break;
+        }
+    }
+
+    if (!scheme) {
+        *err = "invalid lapi base url: scheme is missing";
+        return NULL;
+    }
+
+    if (!authority) {
+        if (url[authority_start_idx] == '\0') {
+            *err = "invalid lapi base url: authority is missing";
+            return NULL;
+        }
+        authority = apr_pstrdup(pool, url + authority_start_idx);
+    }
+
+    struct url *res = apr_palloc(pool, sizeof(struct url));
+    res->scheme = scheme;
+    res->authority = authority;
+    res->path = path;
+
+    return res;
+}
+
 static const char *set_crowdsec_url(cmd_parms * cmd, void *dconf,
                                     const char *url)
 {
@@ -872,7 +936,24 @@ static const char *set_crowdsec_url(cmd_parms * cmd, void *dconf,
         ap_get_module_config(cmd->server->module_config,
                              &crowdsec_module);
 
-    sconf->url = url;
+    const char *err = NULL;
+    struct url *u = find_base_lapi_url(cmd->temp_pool, url, &err);
+    if (err) {
+        return err;
+    }
+
+    ap_log_error(APLOG_MARK, APLOG_DEBUG, APR_SUCCESS, sconf,
+                 "scheme: \"%s\", authority: \"%s\", path: \"%s\"", u->scheme,
+                 u->authority, u->path);
+    if (u->path) {
+        if (apr_strnatcmp(u->path, "/")) {
+            ap_log_error(APLOG_MARK, APLOG_WARNING, APR_SUCCESS, sconf,
+                         "lapi url: path (\"%s\") was found and will be ignored",
+                         u->path);
+        }
+    }
+
+    sconf->url = u;
     sconf->url_set = 1;
 
     return NULL;
