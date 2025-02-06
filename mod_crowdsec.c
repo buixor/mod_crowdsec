@@ -427,7 +427,8 @@ static int crowdsec_proxy(request_rec * r, const char **response)
                   "'%d') from url: %s",
                   status, rr->status, rr->filename);
 
-    if (HTTP_NOT_FOUND == status || (!status && HTTP_NOT_FOUND == rr->status)) {
+    if (HTTP_NOT_FOUND == status ||
+        (status == OK && HTTP_NOT_FOUND == rr->status)) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_SUCCESS, r,
                       "crowdsec: we received a 404 Not Found when speaking "
                       "to the crowdsec service '%s', you might be pointing at "
@@ -437,7 +438,7 @@ static int crowdsec_proxy(request_rec * r, const char **response)
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    else if ((status)) {
+    else if (status != OK) {
 
         crowdsec_config_rec *conf = (crowdsec_config_rec *)
             ap_get_module_config(r->per_dir_config,
